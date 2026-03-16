@@ -58,9 +58,13 @@ function local_minimization(local_method, minimization_problem::MinimizationProb
 end
 
 """
-`$(FUNCTIONNAME)(multistart_method, local_method, minimization_problem)`
+`$(FUNCTIONNAME)(multistart_method, local_method, minimization_problem, [scheduler];
+    scheduler_options...)`
 
-Multistart minimization using the given multistart and local methods.
+Multistart minimization using the given multistart and local methods. The individual
+minimizations are carried out using the `scheduler` from `OhMyThreads`. Instead of
+passing a `Scheduler`, it is also possible to use `scheduler_options`, which will
+automatically construct the most suitable `Scheduler`.
 """
 function multistart_minimization end
 
