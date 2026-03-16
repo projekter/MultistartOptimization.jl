@@ -72,7 +72,7 @@ $(SIGNATURES)
 
 Evaluate and return points of an `N`-element Sobol sequence.
 
-Execution is potentially parallelized using `tasks` Tasks.
+Execution is potentially parallelized using the strategy specified by `scheduler`.
 """
 function sobol_starting_points(minimization_problem::MinimizationProblem, N::Integer, scheduler::Scheduler)
     (; objective, lower_bounds, upper_bounds) = minimization_problem
