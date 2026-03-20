@@ -123,9 +123,11 @@ This function is not exported.
     resemble most closely the steps a serial execution would take.
 """
 default_local_scheduler(; ntasks=Threads.nthreads(), nchunks=nothing, chunksize=nothing, minchunksize=nothing,
-                        split::Union{OhMyThreads.Split,Symbol}=OhMyThreads.RoundRobin(), chunking::Bool=false) =
+                        split::Union{OhMyThreads.Split,Symbol}=OhMyThreads.RoundRobin(), chunking::Bool=false,
+                        migration::Bool=true) =
     isone(Threads.nthreads()) || isone(ntasks) ? SerialScheduler() :
-                                                 GreedyScheduler(; ntasks, nchunks, chunksize, minchunksize, split, chunking)
+                                                 GreedyScheduler(; ntasks, nchunks, chunksize, minchunksize, split, chunking,
+                                                                 migration)
 
 # We need an indexable enumerate() and also want to iterate over the concatenation of two vectors without having to concatenate
 # them. Define this simple struct to achieve both things.
