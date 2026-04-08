@@ -4,6 +4,8 @@
 
 export TikTak
 
+VERSION ≥ v"1.11.0-DEV.469" && eval(Expr(:public, :default_initial_point_scheduler, :default_local_scheduler))
+
 struct TikTak
     quasirandom_N::Int
     initial_N::Int
@@ -93,6 +95,38 @@ function _keep_lowest!(xs, N)
     partialsort!(xs, 1:N, by = p -> p.value)
 end
 
+"""
+$(SIGNATURES)
+
+Constructs the scheduler used to compute the function values at the initial points. If
+multiple threads are used, this is a `StaticScheduler`, to which arguments may be passed.
+For a single-threaded run, this is a `SerialScheduler`.
+
+This function is not exported.
+"""
+default_initial_point_scheduler(; ntasks=Threads.nthreads(), chunksize=nothing, minchunksize=nothing,
+                                split::Union{OhMyThreads.Split,Symbol}=OhMyThreads.Consecutive(), chunking::Bool=true) =
+    isone(Threads.nthreads()) || isone(ntasks) ? SerialScheduler() :
+                                                 StaticScheduler(; ntasks, chunksize, minchunksize, split, chunking)
+
+"""
+$(SIGNATURES)
+
+Constructs the scheduler used to invoke the local minimizer on the objective from various
+initial points. If multiple threads are used, this is a `GreedyScheduler`, to which
+arguments may be passed. For a single-threaded run, this is a `SerialScheduler`.
+
+This function is not exported.
+
+!!! warning
+    It is highly recommended to only use the `RoundRobin` splitting strategy in order to
+    resemble most closely the steps a serial execution would take.
+"""
+default_local_scheduler(; ntasks=Threads.nthreads(), nchunks=nothing, chunksize=nothing, minchunksize=nothing,
+                        split::Union{OhMyThreads.Split,Symbol}=OhMyThreads.RoundRobin(), chunking::Bool=false) =
+    isone(Threads.nthreads()) || isone(ntasks) ? SerialScheduler() :
+                                                 GreedyScheduler(; ntasks, nchunks, chunksize, minchunksize, split, chunking)
+
 struct EnumeratedCatVector{T,X<:Tuple{AbstractVector{T},Vararg{AbstractVector{T}}}} <: AbstractVector{Tuple{Int,T}}
     v::X
 end
@@ -122,61 +156,36 @@ $(SIGNATURES)
 Solve `minimization_problem` by using `local_method` within `multistart_method`.
 
 Initial point search and subsequent minimizations are executed according to the scheduler
-policy. The legacy argument `use_threads` enables default parallelization settings. More
-control over multi-threading is possible by passing an explicit `scheduler` or, preferrably,
-by using keyword arguments for constructing a scheduler from `OhMyThreads`.
+policy. The argument `use_threads` enables default parallelization settings; for more
+fine-grained control, explicitly specify the schedulers for the two stages.
 
 `prepend_points` should contain a vector of initial starting points that are prepended to
 the Sobol sequence. These are useful if a guess is available for the vicinity of the
 optimum.
 
 !!! warning
-    It is not advisable to use the `chunksize` option when constructing the scheduler, as the
-    construction of all possible initial point candidates and the actual minimization both use
-    parallelization, but have different numbers of points. It is recommended to use the keyword
-    interface instead of a `Scheduler` object, as different types of schedulers are optimal for
-    the different stages: a `StaticScheduler` for initial point selection and a `GreedyScheduler`
-    for the local minimization.
+    If the local optimization method is deterministic, so is the multistart optimization,
+    provided the `local_scheduler` is serial (multi-threading initial point generation is
+    fine). For a multi-threaded `local_scheduler`, no guarantees can be made either to
+    visit the same starting points in each run.
+    While chunking can be enabled, it is strongly recommended to use the `RoundRobin`
+    method is to be preferred over the `Consecutive` splitting strategy for
+    `local_scheduler`, so that it is more likely to be mixing initial points from
+    probably better starting points.
 """
 function multistart_minimization(multistart_method::TikTak, local_method,
-                                 minimization_problem, scheduler::Union{Scheduler,Nothing}=nothing;
+                                 minimization_problem;
                                  prepend_points = Vector{Vector{Float64}}(),
-                                 use_threads::Union{Nothing,Bool}=nothing, # legacy argument
-                                 ntasks::Union{Integer,Nothing}=nothing,
-                                 chunksize::Union{Integer,Nothing}=nothing,
-                                 minchunksize::Union{Integer,Nothing}=nothing,
-                                 chunking::Union{Bool,Nothing}=nothing,
-                                 nchunks::Union{Integer,Nothing}=nothing,
-                                 split::Union{OhMyThreads.Split,Symbol,Nothing}=nothing)
-    !isnothing(use_threads) && !isnothing(scheduler) &&
-        error("Legacy argument use_threads cannot combined with new scheduler arguments")
-    !isnothing(scheduler) && !all(isnothing, (ntasks, chunksize, minchunksize, chunking, split)) &&
-        error("Either a Scheduler or keyword options for the scheduler have to be specified")
-    if isnothing(use_threads)
-        use_threads = !(scheduler isa SerialScheduler || isnothing(ntasks) || isone(ntasks))
-    end
-    if use_threads
-        if isnothing(scheduler)
-            initial_scheduler = StaticScheduler(; ntasks=isnothing(ntasks) ? Threads.nthreads() : ntasks,
-                                                chunksize, minchunksize,
-                                                chunking=isnothing(chunking) ? true : chunking,
-                                                split=isnothing(split) ? OhMyThreads.Consecutive() : split)
-            optimization_scheduler = GreedyScheduler(; ntasks=isnothing(ntasks) ? Threads.nthreads() : ntasks,
-                                                     chunking=isnothing(chunking) ? false : chunking,
-                                                     nchunks, chunksize, minchunksize,
-                                                     split=isnothing(split) ? OhMyThreads.RoundRobin() : split)
-        else
-            initial_scheduler = optimization_scheduler = scheduler
-        end
-    else
-        initial_scheduler = optimization_scheduler = SerialScheduler()
-    end
+                                 use_threads::Bool=false,
+                                 initial_point_scheduler::Scheduler=use_threads ? default_initial_point_scheduler() :
+                                                                    SerialScheduler(),
+                                 local_scheduler::Scheduler=use_threads ? default_local_scheduler() : SerialScheduler())
     # We now have at most two choices for the schedulers, so union splitting will work - this is type stable
     (; quasirandom_N, initial_N, θ_min, θ_max, θ_pow) = multistart_method
     (; objective, lower_bounds, upper_bounds) = minimization_problem
     @argcheck(all(x -> all(lower_bounds .≤ x .≤ upper_bounds), prepend_points),
               "prepend_points outside problem bounds")
-    quasirandom_points = sobol_starting_points(minimization_problem, quasirandom_N, initial_scheduler)
+    quasirandom_points = sobol_starting_points(minimization_problem, quasirandom_N, initial_point_scheduler)
     initial_points = _keep_lowest!(quasirandom_points, initial_N)
     all_points = EnumeratedCatVector((map(Base.Fix1(_objective_at_location, objective), prepend_points), quasirandom_points))
     function _step((_, visited_minimum)::Tuple{Int,NamedTuple}, (i, initial_point)::Tuple{Int,NamedTuple})
@@ -188,5 +197,5 @@ function multistart_minimization(multistart_method::TikTak, local_method,
         (0, local_minimum.value < visited_minimum.value ? (; local_minimum.location, local_minimum.value) : visited_minimum)
     end
     # do not drop the first point - the local optimizer won't run on init!
-    treduce(_step, all_points; scheduler=optimization_scheduler, init=first(all_points))[2]
+    treduce(_step, all_points; scheduler=local_scheduler, init=first(all_points))[2]
 end
