@@ -127,6 +127,8 @@ default_local_scheduler(; ntasks=Threads.nthreads(), nchunks=nothing, chunksize=
     isone(Threads.nthreads()) || isone(ntasks) ? SerialScheduler() :
                                                  GreedyScheduler(; ntasks, nchunks, chunksize, minchunksize, split, chunking)
 
+# We need an indexable enumerate() and also want to iterate over the concatenation of two vectors without having to concatenate
+# them. Define this simple struct to achieve both things.
 struct EnumeratedCatVector{T,X<:Tuple{AbstractVector{T},Vararg{AbstractVector{T}}}} <: AbstractVector{Tuple{Int,T}}
     v::X
 end
