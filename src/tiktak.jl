@@ -183,8 +183,10 @@ function multistart_minimization(multistart_method::TikTak, local_method,
     # We now have at most two choices for the schedulers, so union splitting will work - this is type stable
     (; quasirandom_N, initial_N, θ_min, θ_max, θ_pow) = multistart_method
     (; objective, lower_bounds, upper_bounds) = minimization_problem
-    @argcheck(all(x -> all(lower_bounds .≤ x .≤ upper_bounds), prepend_points),
-              "prepend_points outside problem bounds")
+    @argcheck(all(x -> begin
+        length(lower_bounds) == length(x) || throw(DimensionMismatch("prepend_points with invalid length"))
+        all(issorted, zip(lower_bounds, x, upper_bounds))
+    end, prepend_points), "prepend_points outside problem bounds")
     quasirandom_points = sobol_starting_points(minimization_problem, quasirandom_N, initial_point_scheduler)
     initial_points = _keep_lowest!(quasirandom_points, initial_N)
     all_points = EnumeratedCatVector((map(Base.Fix1(_objective_at_location, objective), prepend_points), quasirandom_points))
