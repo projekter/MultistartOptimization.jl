@@ -214,21 +214,6 @@ function _optimize(multistart_method::TikTak, local_method, minimization_problem
     foldl(_step, all_points; init)
 end
 
-@static if VERSION < v"1.12"
-    mutable struct OncePerTask{T, F} <: Function
-        const initializer::F
-
-        OncePerTask{T}(initializer::Type{U}) where {T, U} = new{T,Type{U}}(initializer)
-        OncePerTask{T}(initializer::F) where {T, F} = new{T,F}(initializer)
-        OncePerTask{T,F}(initializer::F) where {T, F} = new{T,F}(initializer)
-        OncePerTask(initializer::Type{U}) where U = new{Base.promote_op(initializer), Type{U}}(initializer)
-        OncePerTask(initializer) = new{Base.promote_op(initializer), typeof(initializer)}(initializer)
-    end
-    @inline function (once::OncePerTask{T,F})() where {T,F}
-        get!(once.initializer, task_local_storage(), once)::T
-    end
-end
-
 mutable struct VisitedMinimum{V,T}
     location::V
     value::T
@@ -236,13 +221,13 @@ end
 
 function _optimize(multistart_method::TikTak, local_method, minimization_problem, all_points, scheduler::Scheduler)
     init = first(all_points)[2]
-    tls = OncePerTask{typeof(init.location)}(let x=init.location; () -> similar(x) end)
+    tlv = OhMyThreads.TaskLocalValue{typeof(init.location)}(let x=init.location; () -> similar(x) end)
     l = Threads.SpinLock()
     visited_minimum = VisitedMinimum(init.location, init.value)
-    _step = let tls=tls, l=l, visited_minimum=visited_minimum
+    _step = let tlv=tlv, l=l, visited_minimum=visited_minimum
         function _step((i, initial_point)::Tuple{Int,NamedTuple})
             θ = _weight_parameter(multistart_method, i)
-            x = tls()
+            x = tlv[]
             @. x = (1 - θ) * initial_point.location + θ * visited_minimum.location
             local_minimum = local_minimization(local_method, minimization_problem, x)
             local_minimum ≡ nothing && return visited_minimum
