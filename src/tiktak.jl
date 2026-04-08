@@ -189,15 +189,52 @@ function multistart_minimization(multistart_method::TikTak, local_method,
     end, prepend_points), "prepend_points outside problem bounds")
     quasirandom_points = sobol_starting_points(minimization_problem, quasirandom_N, initial_point_scheduler)
     initial_points = _keep_lowest!(quasirandom_points, initial_N)
-    all_points = EnumeratedCatVector((map(Base.Fix1(_objective_at_location, objective), prepend_points), quasirandom_points))
-    function _step((_, visited_minimum)::Tuple{Int,NamedTuple}, (i, initial_point)::Tuple{Int,NamedTuple})
+    _optimize(
+        multistart_method,
+        local_method,
+        minimization_problem,
+        EnumeratedCatVector((map(Base.Fix1(_objective_at_location, objective), prepend_points), initial_points)),
+        local_scheduler
+    )
+end
+
+function _optimize(multistart_method::TikTak, local_method, minimization_problem, all_points, ::SerialScheduler)
+    function _step(visited_minimum, (i, initial_point))
         θ = _weight_parameter(multistart_method, i)
         x = @. (1 - θ) * initial_point.location + θ * visited_minimum.location
         local_minimum = local_minimization(local_method, minimization_problem, x)
         local_minimum ≡ nothing && return visited_minimum
-        # we don't care about the index parameter, but for type stability of the function, we'll always give back one
-        (0, local_minimum.value < visited_minimum.value ? (; local_minimum.location, local_minimum.value) : visited_minimum)
+        local_minimum.value < visited_minimum.value ? local_minimum : visited_minimum
     end
-    # do not drop the first point - the local optimizer won't run on init!
-    treduce(_step, all_points; scheduler=local_scheduler, init=first(all_points))[2]
+    foldl(_step, all_points; init=first(all_points)[2])
+end
+
+mutable struct VisitedMinimum{V,T}
+    location::V
+    value::T
+end
+
+function _optimize(multistart_method::TikTak, local_method, minimization_problem, all_points, scheduler::Scheduler)
+    init = first(all_points)[2]
+    l = Threads.SpinLock()
+    visited_minimum = VisitedMinimum(init.location, init.value)
+    _step = let l=l, visited_minimum=visited_minimum
+        function _step((i, initial_point)::Tuple{Int,NamedTuple})
+            θ = _weight_parameter(multistart_method, i)
+            x = @. (1 - θ) * initial_point.location + θ * visited_minimum.location
+            local_minimum = local_minimization(local_method, minimization_problem, x)
+            local_minimum ≡ nothing && return visited_minimum
+            if local_minimum.value < visited_minimum.value
+                lock(l)
+                if local_minimum.value < visited_minimum.value
+                    visited_minimum.location = local_minimum.location
+                    visited_minimum.value = local_minimum.value
+                end
+                unlock(l)
+            end
+            return
+        end
+    end
+    tforeach(_step, all_points; scheduler)
+    return (; location=visited_minimum.location, value=visited_minimum.value)
 end
