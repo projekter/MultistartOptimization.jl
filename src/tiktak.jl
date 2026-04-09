@@ -152,6 +152,17 @@ Base.size(e::EnumeratedCatVector) = (sum(length, e.v, init=0),)
 end
 Base.IndexStyle(::Type{X}) where {X<:EnumeratedCatVector} = IndexLinear()
 
+struct NoLock <: Base.AbstractLock end
+Base.lock(::NoLock) = nothing
+Base.trylock(::NoLock) = true
+Base.unlock(::NoLock) = nothing
+Base.islocked(::NoLock) = false
+
+mutable struct VisitedMinimum{V,T}
+    location::V
+    value::T
+end
+
 """
 $(SIGNATURES)
 
@@ -191,49 +202,32 @@ function multistart_minimization(multistart_method::TikTak, local_method,
     end, prepend_points), "prepend_points outside problem bounds")
     quasirandom_points = sobol_starting_points(minimization_problem, quasirandom_N, initial_point_scheduler)
     initial_points = _keep_lowest!(quasirandom_points, initial_N)
-    _optimize(
-        multistart_method,
-        local_method,
-        minimization_problem,
-        EnumeratedCatVector((map(Base.Fix1(_objective_at_location, objective), prepend_points), initial_points)),
-        local_scheduler
-    )
-end
+    all_points = EnumeratedCatVector((map(Base.Fix1(_objective_at_location, objective), prepend_points), initial_points))
 
-function _optimize(multistart_method::TikTak, local_method, minimization_problem, all_points, ::SerialScheduler)
     init = first(all_points)[2]
-    _step = let x=similar(init.location)
-        function _step(visited_minimum, (i, initial_point))
-            θ = _weight_parameter(multistart_method, i)
-            @. x = (1 - θ) * initial_point.location + θ * visited_minimum.location
-            local_minimum = local_minimization(local_method, minimization_problem, x)
-            local_minimum ≡ nothing && return visited_minimum
-            local_minimum.value < visited_minimum.value ? local_minimum : visited_minimum
-        end
+    if local_scheduler isa SerialScheduler
+        tlv = Ref(similar(init.location))
+        l = NoLock()
+    else
+        tlv = OhMyThreads.TaskLocalValue{Base.RefValue{typeof(init.location)}}(let x=init.location; () -> Ref(similar(x)) end)
+        l = Threads.SpinLock()
     end
-    foldl(_step, all_points; init)
-end
-
-mutable struct VisitedMinimum{V,T}
-    location::V
-    value::T
-end
-
-function _optimize(multistart_method::TikTak, local_method, minimization_problem, all_points, scheduler::Scheduler)
-    init = first(all_points)[2]
-    tlv = OhMyThreads.TaskLocalValue{typeof(init.location)}(let x=init.location; () -> similar(x) end)
-    l = Threads.SpinLock()
-    visited_minimum = VisitedMinimum(init.location, init.value)
+    visited_minimum = VisitedMinimum(copy(init.location), init.value)
     _step = let tlv=tlv, l=l, visited_minimum=visited_minimum
         function _step((i, initial_point)::Tuple{Int,NamedTuple})
             θ = _weight_parameter(multistart_method, i)
-            x = tlv[]
+            xref = local_scheduler isa SerialScheduler ? tlv : tlv[]
+            x = xref[]
             @. x = (1 - θ) * initial_point.location + θ * visited_minimum.location
             local_minimum = local_minimization(local_method, minimization_problem, x)
             local_minimum ≡ nothing && return visited_minimum
             if local_minimum.value < visited_minimum.value
                 lock(l)
                 if local_minimum.value < visited_minimum.value
+                    # If local_minimization works in-place, local_minimum ≡ x - so the next iteration in this task would
+                    # overwrite the minimum position. Hence, we swap our temporary with the previous minimum, which has now
+                    # become obsolete.
+                    xref[] = visited_minimum.location
                     visited_minimum.location = local_minimum.location
                     visited_minimum.value = local_minimum.value
                 end
@@ -242,6 +236,6 @@ function _optimize(multistart_method::TikTak, local_method, minimization_problem
             return
         end
     end
-    tforeach(_step, all_points; scheduler)
+    tforeach(_step, all_points; scheduler=local_scheduler)
     return (; location=visited_minimum.location, value=visited_minimum.value)
 end
