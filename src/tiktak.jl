@@ -105,9 +105,11 @@ For a single-threaded run, this is a `SerialScheduler`.
 This function is not exported.
 """
 default_initial_point_scheduler(; ntasks=Threads.nthreads(), chunksize=nothing, minchunksize=nothing,
-                                split::Union{OhMyThreads.Split,Symbol}=OhMyThreads.Consecutive(), chunking::Bool=true) =
+                                split::Union{OhMyThreads.Split,Symbol}=OhMyThreads.Consecutive(), chunking::Bool=true,
+                                thread_ids=Base.OneTo(ntasks)) =
     isone(Threads.nthreads()) || isone(ntasks) ? SerialScheduler() :
-                                                 StaticScheduler(; ntasks, chunksize, minchunksize, split, chunking)
+                                                 StaticScheduler(; ntasks, chunksize, minchunksize, split, chunking,
+                                                                 thread_ids)
 
 """
 $(SIGNATURES)
@@ -124,10 +126,10 @@ This function is not exported.
 """
 default_local_scheduler(; ntasks=Threads.nthreads(), nchunks=nothing, chunksize=nothing, minchunksize=nothing,
                         split::Union{OhMyThreads.Split,Symbol}=OhMyThreads.RoundRobin(), chunking::Bool=false,
-                        migration::Bool=true) =
+                        thread_ids=nothing) =
     isone(Threads.nthreads()) || isone(ntasks) ? SerialScheduler() :
                                                  GreedyScheduler(; ntasks, nchunks, chunksize, minchunksize, split, chunking,
-                                                                 migration)
+                                                                 thread_ids)
 
 # We need an indexable enumerate() and also want to iterate over the concatenation of two vectors without having to concatenate
 # them. Define this simple struct to achieve both things.

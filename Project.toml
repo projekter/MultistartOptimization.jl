@@ -12,6 +12,9 @@ Sobol = "ed01d8cd-4d21-5b2a-85b4-cc3bdc58bad4"
 [weakdeps]
 NLopt = "76087f3c-5699-56af-9a33-bf431cd00edd"
 
+[sources]
+OhMyThreads = {url = "https://github.com/projekter/OhMyThreads.jl.git", rev="explicitids"}
+
 [extensions]
 MultistartOptimizationNLoptExt = "NLopt"
 
